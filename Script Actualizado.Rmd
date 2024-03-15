@@ -1,0 +1,628 @@
+---
+title: "Captura de Carbono"
+author: "Nicolas Velasco"
+date: "2022-10-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+# Load required libraries
+library(tidyverse)
+library(lubridate)
+library(lme4)
+library(car)
+```
+
+# Read initial data (Data from GV Portal & David Table (CC))
+```{r}
+# read in the cleaned real data from GV2050 platform
+MatrizFinal <- read_csv("data/Matriz_Final.csv")
+#Original data had NA and "-" wich were deleted.¿
+DataCC <- read_csv("data/Matriz General de Captura de Carbono Actualizada.csv")
+DataCC <- read_csv("data/Matriz General de Captura de Carbono Actualizada 2.csv")#Datos más actuales
+
+DataCC <-DataCC[,-22]
+#there was a minor modification on the data if compared to previous files (e.g., matriz general captura carbono from 2022).
+#revising the data I realized that the were some mistakes in rows where was scored more than 1 trunk (i.e., when the tree it's divided above breadth height) 
+#in those cases the circumferences of each trunk where summed and the a general DAP was estimated.
+#the problem with that is if we sum circumferences perimeters as a+b+c=z, the "z" circumference will have an area much higher than all the small circumferences 
+#to properly estimate a general DAP (which will be mathematically correct), it should be extracted the area of each individual circumference, them summed all, and finally extract the radius of that total area.
+```
+
+# Rename columns to same format and delete the ones not needed (step don´t really needed, just for an easier way to follow)
+```{r}
+head(MatrizFinal)
+head(DataCC)
+
+colnames(DataCC)[1]<-"Código"
+colnames(DataCC)[10]<-"Altura"
+DataCC$Altura = as.numeric(as.character(DataCC$Altura))
+DataCC$`Sitio específico`[DataCC$`Sitio específico`== 'Finca Mario Piu 2'] <- 'Finca Mario Piu'
+
+Data <- subset( DataCC, select = -c(4:9, 11, 13:14) )
+
+PlantDate<- read_csv("data/atriz_plantas_2023-04-19-1009.csv")
+colnames(PlantDate)[3]<-"PlantingDate"
+
+```
+
+#Combine/add CC data to the Main Data Table (GV2050)
+```{r}
+MatrizFinal<-MatrizFinal %>% add_column(DAP = NA, PlantingDate=NA)
+Data<-Data %>% add_column("ID Monitoreo" = NA, "Código control"=NA, Tratamiento =NA, "Agua inicial"=NA, "Crecimiento"=NA,"Tasa de crecimiento"=NA,	"Tasa de crecimiento acumulada"=NA, 
+"Herviboría"=NA, Flores=NA, "Nuevas hojas"=NA,	Frutos=NA,	Diámetro=NA, Zona=NA,	Familia="Asteraceae", Genero="Scalesia", Especie="pedunculata var. pedunculata Hook. f.", "Nombre común"="lechoso", 
+Sustrato=NA, Proyecto=NA, Subproyecto=NA, PlantingDate=NA)
+
+Data$Tratamiento <- MatrizFinal$Tratamiento[match(Data$Código, MatrizFinal$Código)]
+Data$`Código control` <- MatrizFinal$`Código control`[match(Data$Código, MatrizFinal$Código)]
+Data$Zona <- MatrizFinal$Zona[match(Data$Código, MatrizFinal$Código)]
+Data$Sustrato <- MatrizFinal$Sustrato[match(Data$Código, MatrizFinal$Código)]
+Data$Proyecto <- MatrizFinal$Proyecto[match(Data$Código, MatrizFinal$Código)]
+Data$Subproyecto <- MatrizFinal$Subproyecto[match(Data$Código, MatrizFinal$Código)]
+Data$PlantingDate <- PlantDate$PlantingDate[match(Data$Código, PlantDate$Código)]
+
+TablaFinal <- rbind(MatrizFinal,Data)
+TablaFinal$Isla[TablaFinal$Isla== 'San Cristobal'] <- 'San Cristóbal'
+TablaFinal$`Sitio específico`[TablaFinal$`Sitio específico`== 'Rancho el Manzanillo'] <- 'Rancho El Manzanillo'
+TablaFinal$`Sitio específico`[TablaFinal$`Sitio específico`== 'El Chato'] <- 'Rancho El Chato'
+TablaFinal$`Sitio específico`[TablaFinal$`Sitio específico`== 'Finca Mario Piu 2'] <- 'Finca Mario Piu'
+TablaFinal$`Sitio específico`[TablaFinal$`Sitio específico`== "Finca Darwin's Eco-Garden 2"] <- "Finca Darwin Ecogarden"
+TablaFinal$`Sitio específico`[TablaFinal$`Sitio específico`== "Finca Pedro Castillo (Camote)"] <- "Recinto el Cascajo"
+
+```
+
+
+# Delete data without DAP and add equation
+```{r}
+# Filter only data with DAP
+data_scalesia <- TablaFinal %>% 
+  filter(DAP != 'is.na') 
+
+equation <- function(DAP){-7.9852 + (2.24173*DAP)}
+
+```
+
+
+#Two options for analyses: 
+#1st using all DAP values but deleting the 0 (dead plants)
+```{r}
+data_s0 <- data_scalesia %>% 
+  filter(DAP >0)
+Estimation <- data_s0 %>%
+  mutate(cc = sapply(DAP, equation))
+```
+
+
+#2nd (more conservative): using DAP values <25. The equation according to the paper was estimated only with DAP values in the range 1-25 cm, so higher values should not be considered because of risk of overestimaiton
+```{r}
+data_no25 <- Estimation %>% 
+  filter(DAP < 25) 
+
+
+data_no25 %>%
+  mutate(Fecha = format(as.Date(Fecha, '%d/%m/%Y'), '%d-%m-%Y'),
+         PlantingDate = format(as.Date(PlantingDate, '%d/%m/%Y'), '%d-%m-%Y'))
+
+ data_no25$Fecha<-dmy(data_no25$Fecha)
+ data_no25$PlantingDate<-dmy(data_no25$PlantingDate)
+ data_no25$age<- as.numeric(difftime(data_no25$Fecha, data_no25$PlantingDate , units = c("days")))/365
+
+        
+```
+
+#Two main figure
+```{r}
+library(ggplot2)
+head(data_s0)
+
+p <- ggplot(Estimation, aes(x=Tratamiento, y=cc, fill=Tratamiento))+
+  geom_boxplot()+ 
+  facet_wrap(~Isla)
+p+theme_classic()+theme(axis.text.x=element_blank()) + ylab("Carbon capture (kg/indvidual)")+xlab("Island")+labs(fill="Treatment")
+
+q<-ggplot(data_no25, aes(x=Tratamiento, y=cc, fill=Tratamiento))+
+  geom_boxplot()+ 
+  facet_wrap(~Isla)
+q+theme_classic()+theme(axis.text.x=element_blank())+theme(plot.margin = unit(c(1,1,5,1), "cm"))+ylab("Carbon capture (kg/indvidual)")+xlab("Island")+labs(fill="Treatment")
+```
+
+```{r}
+r<-ggplot(subset(data_no25,Isla %in% c("Santa Cruz")), aes(x=Tratamiento, y=cc, fill=Tratamiento))+
+  geom_boxplot()+ 
+  facet_wrap(~Isla)
+r+theme_classic()+theme(axis.text.x=element_blank())+theme(plot.margin = unit(c(1,1,5,1), "cm"))+ylab("Carbon capture (kg/indvidual)")+xlab(NULL)+labs(fill="Treatment")
+```
+
+```{r}
+v<-ggplot(subset(data_no25,Isla %in% c("Santa Cruz")), aes(x=Tratamiento, y=cc, fill=Tratamiento))+
+  geom_bar(position = "dodge", stat = "summary", fun = "mean")+stat_summary(fun.data = mean_se,  
+                 geom = "errorbar",width = 0.2)
+
+v+theme_classic()+theme(axis.text.x=element_blank())+
+  theme(axis.title.x=element_blank()) +ylab("Carbon capture (kg/indvidual)")+xlab(NULL)+labs(fill="Treatment")
+```
+
+```{r}
+s<-subset(data_no25,Isla %in% c("Santa Cruz"))
+t<-lm(cc~Tratamiento*Altura, s)
+anova(t)
+ggplot(t, aes(x = Altura, y = cc, color = Tratamiento) ) +
+     geom_point() +
+     geom_smooth(method = "lm", se = F)+
+  theme_classic()+theme(plot.margin = unit(c(1,1,5,1), "cm"))+ylab("Carbon capture (kg/indvidual)")+xlab("Height (cm)")+labs(fill="Treatment")
+
+#write.csv(s, "snormal.csv")
+
+```
+
+```{r}
+data_no25<-data_no25[,-23]
+write.csv(data_no25,"Datos no25.csv")
+```
+
+##ojo, estos son valores por individuo, no por hectarea
+
+```{r}
+colnames(data_no25)[25]<-"Site"
+s<-subset(data_no25,Isla %in% c("Santa Cruz"))
+s<-subset(s,age >1)
+#M1<-lmer(cc~age*Tratamiento+(1|Site),data=data_no25)
+M1<-glm(cc~age*Tratamiento, family=gaussian(link="identity"), data=s)
+summary(M1)
+Anova(M1, type="II")
+
+ggplot(M1, aes(x = age, y = cc, color = Tratamiento) ) +
+     geom_point() +
+     geom_smooth(method = "lm", se = F)+
+  theme_classic()+theme(plot.margin = unit(c(1,1,5,1), "cm"))+ylab("Carbon capture (kg/indvidual)")+xlab("Years")+labs(fill="Treatment")
+```
+
+```{r}
+TablaFinal$Fecha<-as.Date(dmy(TablaFinal$Fecha))
+NewDate <- TablaFinal %>%
+  group_by(Código) %>%
+  summarise_at(vars(Fecha),
+               list(min = min))
+TablaFinal$PlantingDate <- NewDate$min[match(TablaFinal$Código, NewDate$Código)]
+data_height <- subset(TablaFinal, !(Isla == "San Cristóbal")) #eliminar san cristobal
+#data_height <-subset(TablaFinal,Isla %in% c("Santa Cruz")) #use this to get specific island analysis
+data_height <- subset(data_height,Especie %in% c("pedunculata var. pedunculata Hook. f.")) #replace data_height for TablaFinal if you want the full analysis
+data_height$Estado[data_height$Estado=='Regular']<-1
+data_height$Estado[data_height$Estado=='Bueno']<-1
+data_height$Estado[data_height$Estado=='Malo']<-1
+data_height$Estado[data_height$Estado=='Muerto']<-0
+data_height$Estado[data_height$Estado=='muerto']<-0
+
+data_height$age<- as.numeric(difftime(data_height$Fecha, data_height$PlantingDate , units = c("days")))/365
+
+
+data_height$Estado<-as.numeric(data_height$Estado)
+data_height <- data_height[data_height$Altura != 0 & !is.na(data_height$Altura), ]
+
+```
+
+```{r}
+library(survival)
+library(ggfortify)
+library(survminer)
+library(dplyr)
+KM_curve_data <- dplyr::select(data_height, Código, time=age, event=Estado, Tratamiento) 
+### Needs to be summarized by individual:
+KM_curve_data_summ <- group_by(KM_curve_data, Código, Tratamiento) %>%   dplyr::summarize(time_max = max(time)) 
+
+KM_curve <- survfit(Surv(KM_curve_data_summ$time_max) ~ KM_curve_data_summ$Tratamiento)
+plot(KM_curve, conf.int=T, col=c("black","grey"))
+
+
+autoplot(KM_curve) + 
+  labs(x = "\n Survival Time (Years) ", y = "Survival Probabilities \n", 
+       title = "Survival Times Of \n S. pedunculata plantings\n") + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(face="bold", colour="#FF7A33", size = 12),
+        axis.title.y = element_text(face="bold", colour="#FF7A33", size = 12),
+        legend.title = element_text(face="bold", size = 10),
+        strip.background = element_rect(color = NA)) +
+  theme_classic()
+
+write.csv(data_height,"data_height.csv")
+```
+
+```{r}
+testear<-subset(data_height, data_height$DAP > 0)
+testear<-subset(testear, testear$age > 0)
+cor.test((testear$age*testear$Altura),testear$DAP^0.5) #correlation 0.7119317 
+
+unique_categories <- unique(testear$Isla)
+colors <- c("red", "blue", "green", "yellow")  # Add more colors if needed
+plot(testear$Altura, testear$DAP, col = colors[match(testear$Isla, unique_categories)], xlab = "Height (m)", ylab = "DAP (cms)")
+legend("topright", legend = unique_categories, col = colors, pch = 1)
+```
+
+```{r}
+#hay harta dispersión de datos
+#esto puede ser porque varias medidas tenían erroes (por ej. DAP como suma de circunferencias)
+#también hay datos raros donde una planta pasa de 8.5 m a 13 metros de un año a otro, esto puede ser por diferentes personas midiendo, o instrumento (clinometro versus vara)
+#mejor plotear el growth rate, para ver donde hay aumentos abruptos de pendiente, y revisar esos datos en plataforma.
+library(dplyr)
+unique(data_height$`Sitio específico`)
+subset_data <- subset(data_height, `Sitio específico` == "Finca Mario Piu")
+subset_data$Código <- factor(subset_data$Código)
+unique_codes <- unique(subset_data$Código)
+selected_codes <- unique_codes[1:40]  # Adjust the subset of codes as needed
+subset_data <- subset(data_height, `Sitio específico` == "Finca Mario Piu" & Código %in% selected_codes)
+
+# Plot individual graphs for each set of selected codes and study_site
+ggplot(subset_data, aes(x = age, y = Altura, group = Código, color = Código)) +
+  geom_line() +
+  labs(x = "Age", y = "Height", color = "Plant Code") +
+  facet_wrap(~ Código, ncol = 8, scales = "free_y", labeller = as_labeller(function(code) code)) +
+  theme_minimal()
+
+#conflictive codes:
+#9915 #900 #312 #383 #487 #401 #404 #408 #419 #337 #9574 #9618 #9619 #9639 #9640 #9645 #9646 # 9664 #9666 # 9675 #9677 #9688 #9700 #9710 # 9719 #9721 #9722 #9728 #9731 #9734 #9739 #9744 # 9745 #9749 #9756 #9758 #9759 #9760 #9762 #9765 #9767 #9768 #9771 #9773 # 9774 # 9775 #9776 # 9783 #9786 # 9790 #9795 #9796 #9797 #9803 #9807 # 9808 # 9809 #9811 #9812 #9813 #14297 #14316 #13089 #13029 #12998 #13000 #13094
+#-> probables Zanthoxylum #160 #265 #266 # 467 #468 #463  #464 #465 
+#extraer unique codes, y extraer datos desde TablaFinal con esos códigos, si todo está bien ña unica especie debería ser Scalesia pedunculata, si no hay más de una especie por código
+
+
+```
+
+#tal vez convenga hacer todo de nuevo, con todos los datos e islas, así aumentamos el n y usamos la formula general de la literatura (también hay más edades) (casi 500 datos de CC). Revisar si están todos pasados
+
+```{r}
+testear<-subset(data_height, data_height$DAP > 0)
+testear<-subset(testear, testear$age > 0)
+correlation<-cor.test(testear$DAP,testear$Altura)
+plot(testear$DAP,testear$Altura)
+
+model <- glm(DAP ~ Altura*age, data = testear, family = Gamma(link = "log"))
+summary(model)
+testear$Gama.DAP <- predict(model, data = testear, type = "response")
+
+regression_model <- lm(DAP ~ Altura*age, data = testear)
+equation <- summary(regression_model)$coefficients
+print(paste("Correlation coefficient:", correlation))
+print(equation)
+summary(regression_model)
+
+data_height$Est.DAP<- abs(-0.16301537+(0.01248594*data_height$Altura)+
+  (1.73855379*data_height$age)-(0.00161092*data_height$Altura*data_height$age))
+plot(data_height$Est.DAP,data_height$age)
+cor(data_height$Est.DAP,data_height$Altura)
+cor(data_height$Est.DAP,data_height$age)
+?cor()
+library(akima)
+library(rgl)
+#df<-subset(data_height,Isla=="Santa Cruz")
+df<-as.data.frame(unique(data_height[, c("Altura", "age", "Est.DAP")]))
+library(plotly)
+
+
+test_plotly <- with(df, interp(Altura, age, Est.DAP,
+                                        duplicate = "mean"))
+plot_ly(x = test_plotly$x, y = test_plotly$y, z = test_plotly$z,
+              contours = list(
+          x = list(show = T, color = "white", width = 1, highlightcolor = "#ff0000", start = 0, end = 1600, size = 50),
+          y = list(show = T, color = "white", width = 1, highlightcolor = "#ff0000", start = 0, end = 8, size = 0.1),
+          z = list(show = F, color = "white", width = 1, highlightcolor = "#ff0000", start = 0, end = 16, size = 0.5))) %>% 
+  add_surface(x = test_plotly$x, y = test_plotly$y, z = test_plotly$z, type = "surface") %>% 
+    layout(scene = list(
+      xaxis=list(title='Height (cms)'),
+      yaxis=list(title='Age (years)'),
+      zaxis=list(title='DBH (cms)')))
+
+```
+#MAYBE ALSO CHECK TRUNK CIRCUNFERENCE? hAMMAN 1979
+```{r}
+#**Kitayama equations**
+#DryMass(WoodyParts)= 0.01540*(DAP^2)*1.60906 #r2 = 0.99
+#DryMass(Foliage) = 0.01769*(DAP^2)*0.77946, #r2 = 0.76
+
+data_height$KitDM<-((0.01540*((data_height$Est.DAP^2)^1.60906))+(0.01769*((data_height$Est.DAP^2)^0.77946)))
+data_height$Altura<-data_height$Altura/100   
+```
+
+```{r}
+df3<-subset(data_height,Tratamiento=="Cocoon")
+df4<-subset(data_height,Tratamiento=="Waterboxx®_Hidrogel")
+df6<-subset(data_height,Tratamiento=="Cocoon_Hidrogel")
+df8<-subset(data_height,Tratamiento=="Control")
+df11<-subset(data_height,Tratamiento=="Waterboxx®")
+df12<-subset(data_height,Tratamiento=="Hidrogel")
+
+df2<-as.data.frame(unique(df3[, c("Altura", "age","KitDM")]))
+df5<-as.data.frame(unique(df4[, c("Altura", "age","KitDM")]))
+df7<-as.data.frame(unique(df6[, c("Altura", "age","KitDM")]))
+df9<-as.data.frame(unique(df8[, c("Altura", "age","KitDM")]))
+df13<-as.data.frame(unique(df11[, c("Altura", "age","KitDM")]))
+df14<-as.data.frame(unique(df12[, c("Altura", "age","KitDM")]))
+
+library(plotly)
+
+
+test_plotly <- with(df2, interp(Altura, age, KitDM, 
+                                        duplicate = "mean"))
+test_plotly2 <- with(df5, interp(Altura, age, KitDM, 
+                                        duplicate = "mean"))
+test_plotly3 <- with(df7, interp(Altura, age, KitDM, 
+                                        duplicate = "mean"))
+test_plotly4 <- with(df9, interp(Altura, age, KitDM, 
+                                        duplicate = "mean"))
+test_plotly5 <- with(df13, interp(Altura, age, KitDM, 
+                                        duplicate = "mean"))
+test_plotly6 <- with(df14, interp(Altura, age, KitDM, 
+                                        duplicate = "mean"))
+
+plot_ly(x = test_plotly$x, y = test_plotly$y, z = test_plotly$z,
+        contours = list(
+          x = list(show = T, color = "black", width = 1, highlightcolor = "#ff0000", start = 0, end = 17, size = 0.5),
+          y = list(show = T, color = "black", width = 1, highlightcolor = "#ff0000", start = 0, end = 10, size = 0.1),
+          z = list(show = F, color = "white", width = 1, highlightcolor = "#ff0000", start = 0, end = 120, size = 5)
+        )) %>% 
+  add_surface(x = test_plotly$x, y = test_plotly$y, z = test_plotly$z,  colorscale = list(c(0,"rgb(107,204,214)"),c(1,"rgb(0,90,124)"))) %>% 
+  add_surface(x = test_plotly2$x, y = test_plotly2$y, z = test_plotly2$z, colorscale = list(c(0,"rgb(243,189,245)"),c(1,"rgb(120,0,134)"))) %>% 
+  add_surface(x = test_plotly3$x, y = test_plotly3$y, z = test_plotly3$z, colorscale = list(c(0,"rgb(212,140,166)"),c(1,"rgb(210,70,104)"))) %>% 
+  add_surface(x = test_plotly4$x, y = test_plotly4$y, z = test_plotly4$z, colorscale = list(c(0,"rgb(140,183,151)"),c(1,"rgb(50,166,81)"))) %>% 
+  add_surface(x = test_plotly5$x, y = test_plotly5$y, z = test_plotly5$z, colorscale = list(c(0,"rgb(232,232,143)"),c(1,"rgb(236,236,26)"))) %>% 
+  add_surface(x = test_plotly6$x, y = test_plotly6$y, z = test_plotly6$z, colorscale = list(c(0,"rgb(236,167,150)"),c(1,"rgb(226,60,19)"))) %>% 
+  layout(scene = list(
+    xaxis = list(title = 'Height'),
+    yaxis = list(title = 'Age'),
+    zaxis = list(title = 'KitDM')
+  ))
+```
+#INCREASE OF dm WITH AGE, but treatments made that plant store mean levels of DM at some age. less propency to fall?
+
+#SALTAR ESTE PASO
+```{r}
+library(lmerTest)
+#SUBSET DATA TO CORRESPONDE TO KITAYAMA -->dap 2.5-13.2 cm, hEIGHT 3.4-10 m
+
+subdat <- subset(data_height, Est.DAP >= 2.5 & Est.DAP <= 13.2 & Altura >= 3.4 & Altura <= 10)
+model <- lmer(KitDM ~ Tratamiento*age + (1 | Código)+(1|age), data = subdat)
+reduced_model <- lmer(KitDM ~ age + (1 | Código)+(1|age), data = subdat) #marginally better with
+anova(model,reduced_model)
+summary(model)
+
+library(ggplot2)
+interaction.plot(subdat$age, subdat$Tratamiento, fitted(model), col = c("green", "cyan", "blue", "red","brown","yellow",""), lwd = 1)
+
+library(sjPlot)
+plot_model(model, type = "pred", terms = c("age", "Tratamiento"),
+           show.values = TRUE, ci.lvl = 0.95, colors = "Set1")
+?plot_model
+```
+
+```{r}
+unique_combinations <- data_height %>%
+  filter(!is.na(`DAP`)) %>%
+  group_by(`Sitio específico`) %>%
+  summarise(Avg_Latitud = mean(Latitud, na.rm = TRUE),
+            Avg_Longitud = mean(Longitud, na.rm = TRUE)) %>%
+  na.omit()
+unique_combinations #obtener la media
+```
+
+```{r}
+minimal_height <- data_height %>%
+  filter(!is.na(Altura)) %>%
+  group_by(Código) %>%
+  arrange(Fecha) %>%
+  slice(1) %>%
+  summarise(Minimal_Height = min(Altura, na.rm = TRUE))
+
+minimal_height
+hist(minimal_height$Minimal_Height)
+minimal_height<-subset(minimal_height, Minimal_Height<=100)
+mean(minimal_height$Minimal_Height)
+standard_deviation <- sd(minimal_height$Minimal_Height)
+standard_error <- standard_deviation / sqrt(length(minimal_height))
+standard_error
+hist(minimal_height$Minimal_Height)
+```
+
+#logistic model of survival. Additive terms because interaction was too complex (not same level always) to converge
+```{r}
+library(lme4)
+model_logistic <- glmer(Estado ~ Tratamiento+age + (1 | Código) + (1 | `Sitio específico`), 
+                        data = data_height, family = binomial(link = "logit"))
+Anova(model_logistic, type=3)
+summary(model_logistic)
+anova(model_logistic)
+
+data_height$PredSurv<-predict(model_logistic, type = "response")
+
+# Function to add Brownian noise to a numeric vector
+add_brownian_noise <- function(vector, strength = 0.02) {
+  noise <- rnorm(length(vector), mean = 0, sd = strength)
+  return(vector + noise)
+}
+
+# Apply Brownian noise to the data
+data_height <- data_height %>%
+  mutate(
+    age_with_noise = add_brownian_noise(age),
+    PredSurv_with_noise = add_brownian_noise(PredSurv)
+  )
+
+# Create a scatter plot of PredSurv vs. Tratamiento with Brownian noise
+ggplot(data_height, aes(x = age_with_noise, y = PredSurv_with_noise, color = Tratamiento)) +
+  geom_point(size = 1, alpha = 0.1) +
+  geom_smooth(method = "loess", se = TRUE, size = 1.2) +
+  labs(x = "Age", y = "Predicted Survival Probability", color = "Treatment") +
+  scale_color_manual(values = c("Cocoon" = "red", "Cocoon_Hidrogel" = "blue", "Waterboxx®" = "orange", "Control" = "purple", "Hidrogel" = "#009933", "Waterboxx®_Hidrogel" = "yellow")) +
+  theme_minimal() +
+  ggtitle("Predicted Survival by Treatment and Age")
+
+```
+
+```{r}
+# Assuming you want to summarize by mean PredSurv for each Código, Tratamiento, and time cutoff
+data_summary <- data_height %>%
+  filter(age >= 0.5 & age <= 1.5 | age >= 3.5 & age <= 4.5) %>%
+  group_by(Código, Tratamiento, time_cutoff = ifelse(age <= 1.5, "1 Year", "4 Years")) %>%
+  summarize(Mean_PredSurv = mean(PredSurv))
+
+# Create a box plot
+ggplot(data_summary, aes(x = reorder(Tratamiento, Mean_PredSurv), y = Mean_PredSurv, fill = time_cutoff)) +
+  geom_boxplot(width = 0.5, outlier.size = 1, outlier.colour = "gray60") +
+  labs(x = "Treatment", y = "Estimated Survival") +
+  scale_fill_manual(values = c("lightblue", "lightgreen")) + # Customize box color
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ # Rotate x-axis labels for better readability
+ scale_x_discrete(labels = function(x) gsub("_", " + ", x))
+# Perform Tukey post-hoc test by time_cutoff
+tukey_results <- data_summary %>%
+  group_by(time_cutoff) %>%
+  do(tukey = TukeyHSD(aov(Mean_PredSurv ~ Tratamiento, data = .)))
+
+# View Tukey post-hoc test results for 1 Year
+tukey_results %>%
+  filter(time_cutoff == "1 Year") %>%
+  pull(tukey)
+
+# View Tukey post-hoc test results for 4 Years
+tukey_results %>%
+  filter(time_cutoff == "4 Years") %>%
+  pull(tukey)
+
+
+```
+
+```{r}
+data_height$CC<-data_height$KitDM*0.5
+
+summary_data <- data_height %>%
+  group_by(`Sitio específico`) %>%
+  summarise(Unique_Codigo_Count = n_distinct(Código))
+
+```
+
+#0.53 is for multiplying the CC (Kg) of 1 plant, to a 530 indviduals stands in Megagrams
+```{r}
+# Remove outliers where CC > 51
+data_height_filtered <- subset(data_height, CC <= 51)
+
+# Calculate the mean predicted survival for the whole filtered data
+mean_pred_survival_all_filtered <- mean(data_height_filtered$PredSurv)
+
+# Create a new data frame for Waterboxx® treatment (filtered)
+data_waterboxx_filtered <- subset(data_height_filtered, Tratamiento == "Waterboxx®")
+mean_pred_survival_waterboxx_filtered <- mean(data_waterboxx_filtered$PredSurv)
+
+# Create a new data frame for Control treatment (filtered)
+data_control_filtered <- subset(data_height_filtered, Tratamiento == "Control")
+mean_pred_survival_control_filtered <- mean(data_control_filtered$PredSurv)
+
+# Create the plots with smaller and more pale dots, trend curves, and colors
+Plot1 <- ggplot(data = data_height_filtered, aes(x = age, y = CC * 0.53 * PredSurv)) +
+  geom_point(aes(color = "Original"), alpha = 0.2, size = 0.9, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.2)) +  # Smaller and more pale dots for the original curve with jitter
+  geom_smooth(method = "loess", se = FALSE, color = "grey") +  # Trend line for the original curve
+  geom_point(data = data_waterboxx_filtered, aes(x = age, y = CC * 0.53 * PredSurv, color = "Waterboxx"), alpha = 0.2, size = 0.9, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.2)) +  # Smaller and more pale dots for Waterboxx® with jitter
+  geom_smooth(data = data_waterboxx_filtered, aes(x = age, y = CC * 0.53 * PredSurv, color = "Waterboxx"), method = "loess", se = FALSE) +  # Trend line for Waterboxx®
+  geom_point(data = data_control_filtered, aes(x = age, y = CC * 0.53 * PredSurv, color = "Control"), alpha = 0.2, size = 0.9, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.2)) +  # Smaller and more pale dots for Control with jitter
+  geom_smooth(data = data_control_filtered, aes(x = age, y = CC * 0.53 * PredSurv, color = "Control"), method = "loess", se = FALSE) +  # Trend line for Control
+  labs(x = "Age", y = "CC * Mean Predicted Survival") +
+  ggtitle("Curves of (CC * Mean Predicted Survival) vs. Age") +
+  scale_color_manual(values = c("Original" = "grey", "Waterboxx" = "orange", "Control" = "purple")) +
+  theme_minimal()
+
+# Display the plot
+Plot1
+
+
+
+
+
+# Define a function to add Brownian noise to a vector
+add_brownian_noise <- function(vector, scale_factor) {
+  n <- length(vector)
+  delta <- rnorm(n, 0, scale_factor)  # Generate random noise
+  return(vector + delta)
+}
+
+# Add Brownian noise to the data
+data_height_filtered$CC_Noisy <- add_brownian_noise(data_height_filtered$CC * 0.53 * data_height_filtered$PredSurv, scale_factor = 0.2)
+data_waterboxx_filtered$CC_Noisy <- add_brownian_noise(data_waterboxx_filtered$CC * 0.53 * data_waterboxx_filtered$PredSurv, scale_factor = 0.2)
+data_control_filtered$CC_Noisy <- add_brownian_noise(data_control_filtered$CC * 0.53 * data_control_filtered$PredSurv, scale_factor = 0.2)
+
+# Create the plots with smaller and more pale dots, noisy trend curves, and colors
+Plot2 <- ggplot(data = data_height_filtered, aes(x = age, y = CC_Noisy)) +
+  geom_point(aes(color = "Original"), alpha = 0.2, size = 0.9, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.2)) +  # Smaller and more pale dots for the original curve with jitter
+  geom_smooth(method = "loess", se = T, color = "#666666") +  # Noisy trend line for the original curve
+  geom_point(data = data_waterboxx_filtered, aes(x = age, y = CC_Noisy, color = "Waterboxx"), alpha = 0.2, size = 0.9, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.2)) +  # Smaller and more pale dots for Waterboxx® with jitter
+  geom_smooth(data = data_waterboxx_filtered, aes(x = age, y = CC_Noisy, color = "Waterboxx"), method = "loess", se = T) +  # Noisy trend line for Waterboxx®
+  geom_point(data = data_control_filtered, aes(x = age, y = CC_Noisy, color = "Control"), alpha = 0.2, size = 0.9, position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.2)) +  # Smaller and more pale dots for Control with jitter
+  geom_smooth(data = data_control_filtered, aes(x = age, y = CC_Noisy, color = "Control"), method = "loess", se = T) +  # Noisy trend line for Control
+  labs(x = "Age (years)", y = "Carbon Sequestration (Mg)") +
+  ggtitle("Curves of (CC * Mean Predicted Survival with Noise) vs. Age") +
+  scale_color_manual(values = c("Original" = "#666666", "Waterboxx" = "orange", "Control" = "purple")) +
+  theme_minimal()#+
+  #geom_segment(aes(x = 8.75, xend = Inf, y = 22, yend = 22), linetype = "dashed", color = "orange") +
+ # geom_segment(aes(x = 8.75, xend = Inf, y = 21, yend = 21), linetype = "dashed", color = "purple") +
+  #geom_text(aes(x = 10.25, y = 22.9, label = "22"), color = "orange")+
+  #geom_text(aes(x = 10.35, y = 20.2, label = "21"), color = "purple")
+
+# Display the plot
+Plot2
+
+```
+#not used
+```{r}
+
+# Define the number of plants
+num_plants <- 550
+
+# Create a data frame to store individual plant data
+individual_plant_data <- data.frame(
+  PlantID = rep(1:num_plants, each = nrow(data_height_filtered)),
+  Age = rep(data_height_filtered$age, times = num_plants),
+  PredSurv = rep(data_height_filtered$PredSurv, times = num_plants),
+  Tratamiento = rep(data_height_filtered$Tratamiento, times = num_plants),
+  CC_Noisy = rep(data_height_filtered$CC_Noisy, times = num_plants)
+)
+
+# Add Brownian noise to each individual plant's CC_Noisy
+individual_plant_data$CC_Noisy <- add_brownian_noise(individual_plant_data$CC_Noisy * 0.55 * individual_plant_data$PredSurv, scale_factor = 0.2)
+
+# Create a plot with individual plant trajectories
+Plot3 <- ggplot(data = individual_plant_data, aes(x = Age, y = CC_Noisy, group = PlantID, color = Tratamiento)) +
+  geom_line(alpha = 0.2, size = 0.9) +
+  labs(x = "Age", y = "CC * Mean Predicted Survival with Noise") +
+  ggtitle("Individual Plant Trajectories of (CC * Mean Predicted Survival with Noise) vs. Age") +
+  scale_color_manual(values = c("Waterboxx®" = "orange", "Control" = "purple")) +
+  theme_minimal()
+
+# Display the plot
+Plot3
+
+```
+
+```{r}
+library(lme4)
+library(ggplot2)
+
+# Fit the logistic mixed-effects model
+model_logistic <- glmer(Estado ~ Tratamiento + age + (1 | Código) + (1 | `Sitio específico`), 
+                        data = data_height, family = binomial(link = "logit"))
+
+# Extract predicted probabilities for each treatment group
+treatment_levels <- unique(data_height$Tratamiento)
+predicted_probabilities <- data.frame()
+
+for (treatment in treatment_levels) {
+  subset_data <- subset(data_height, Tratamiento == treatment)
+  subset_data$PredSurv <- predict(model_logistic, newdata = subset_data, type = "response")
+  predicted_probabilities <- rbind(predicted_probabilities, subset_data)
+}
+
+# Create a plot of logistic curves for each treatment group
+ggplot(predicted_probabilities, aes(x = age, y = PredSurv, color = Tratamiento)) +
+  geom_line(size = 1) +
+  labs(x = "Age", y = "Predicted Probability of Estado", color = "Treatment") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal() +
+  ggtitle("Logistic Curves of Estado vs. Age by Treatment")
+
+```
